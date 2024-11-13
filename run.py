@@ -16,7 +16,8 @@ from PIL import Image
 import io
 import win32clipboard
 from io import BytesIO
-from selenium.webdriver.common.action_chains import ActionChains
+import random
+
 class FacebookAutomationGUI:
     def __init__(self):
         self.window = tk.Tk()
@@ -26,7 +27,12 @@ class FacebookAutomationGUI:
         self.is_running = False
         self.delay_between_posts = tk.StringVar(value="10")
         self.images_folder = tk.StringVar()
+        self.add_profile_link = tk.BooleanVar(value=False)
         self.driver = None
+        
+        # إضافة متغيرات لعرض التقدم
+        self.current_cookie = tk.StringVar(value="0/0")
+        self.current_group = tk.StringVar(value="0/0")
         
         self.create_gui()
         
@@ -34,6 +40,23 @@ class FacebookAutomationGUI:
         input_frame = ttk.Frame(self.window, padding="10")
         input_frame.pack(fill=tk.BOTH, expand=True)
         
+        # إضافة إطار لعرض التقدم
+        progress_frame = ttk.LabelFrame(input_frame, text="حالة التقدم", padding="5")
+        progress_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # عرض رقم الكوكيز الحالي
+        cookie_progress_frame = ttk.Frame(progress_frame)
+        cookie_progress_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(cookie_progress_frame, text="الكوكيز الحالي:").pack(side=tk.LEFT)
+        ttk.Label(cookie_progress_frame, textvariable=self.current_cookie).pack(side=tk.LEFT, padx=(5, 0))
+        
+        # عرض رقم المجموعة الحالية
+        group_progress_frame = ttk.Frame(progress_frame)
+        group_progress_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(group_progress_frame, text="المجموعة الحالية:").pack(side=tk.LEFT)
+        ttk.Label(group_progress_frame, textvariable=self.current_group).pack(side=tk.LEFT, padx=(5, 0))
+        
+        # باقي عناصر الواجهة
         ttk.Label(input_frame, text="الكوكيز (كل كوكيز في سطر منفصل):").pack(anchor=tk.W)
         self.cookie_text = scrolledtext.ScrolledText(input_frame, height=4)
         self.cookie_text.pack(fill=tk.X, pady=(0, 10))
@@ -42,7 +65,11 @@ class FacebookAutomationGUI:
         self.groups_text = scrolledtext.ScrolledText(input_frame, height=5)
         self.groups_text.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Label(input_frame, text="نص المنشور:").pack(anchor=tk.W)
+        # Add checkbox for profile link
+        ttk.Checkbutton(input_frame, text="إضافة رابط الملف الشخصي للمجموعات", 
+                       variable=self.add_profile_link).pack(anchor=tk.W, pady=(0, 10))
+        
+        ttk.Label(input_frame, text="نصوص المنشورات (افصل بين المنشورات بعلامة &&):").pack(anchor=tk.W)
         self.posts_text = scrolledtext.ScrolledText(input_frame, height=5)
         self.posts_text.pack(fill=tk.X, pady=(0, 10))
         
@@ -72,7 +99,7 @@ class FacebookAutomationGUI:
         ttk.Label(input_frame, text="سجل العمليات:").pack(anchor=tk.W)
         self.log_text = scrolledtext.ScrolledText(input_frame, height=6)
         self.log_text.pack(fill=tk.BOTH, expand=True)
-
+    
     def select_images_folder(self):
         folder = filedialog.askdirectory()
         if folder:
@@ -174,47 +201,61 @@ class FacebookAutomationGUI:
                 
         except Exception as e:
             raise Exception(f"خطأ في استيراد الكوكيز: {str(e)}")
-
-    def create_post(self, driver, group_link, post_content, image_path):
-        try:
-            driver.get(group_link)
-            wait = WebDriverWait(driver, 5)
-            
-            # انتظار تحميل الصفحة
-            self.clic_empty_space(driver=self.driver);
-            
-            # إنشاء كائن Actions للتحكم في الماوس
-            # actions = ActionChains(driver)
-            
-            # # تحريك الماوس لمكان فارغ والنقر
-            # actions.move_to_element(driver.find_element(By.TAG_NAME, "body"))
-            # actions.move_by_offset(100, 100)
-            # actions.click()
-            # actions.perform()
-            
-            # self.log("تم النقر في مكان فارغ")
-
-            # باقي الكود كما هو...
-            post_button_selectors = [
-                "//span[contains(text(), \"What's on your mind?\")]",
-                "//div[contains(text(), \"What's on your mind?\")]",
-                "//span[contains(text(), 'Write something...')]",
-                "//div[@role='button']//span[contains(text(), 'Write something')]",
-            ]
-
-            post_button = None
+    def find_post_button(self, driver, wait):
+        """Try to find the post button with multiple attempts"""
+        post_button_selectors = [
+            "//span[contains(text(), \"What's on your mind?\")]",
+            "//div[contains(text(), \"What's on your mind?\")]",
+            "//span[contains(text(), 'Write something...')]",
+            "//div[@role='button']//span[contains(text(), 'Write something')]",
+        ]
+        
+        max_attempts = 3
+        for attempt in range(max_attempts):
             for selector in post_button_selectors:
                 try:
                     post_button = wait.until(EC.element_to_be_clickable((By.XPATH, selector)))
                     driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", post_button)
                     time.sleep(1)
                     post_button.click()
+                    return True
+                except:
+                    continue
+                    
+            if attempt < max_attempts - 1:
+                # If button not found, click empty space and try again
+                self.clic_empty_space(driver)
+                time.sleep(2)
+                
+        return False
+
+    def create_post(self, driver, group_link, post_content, image_path):
+        try:
+            driver.get(group_link)
+            wait = WebDriverWait(driver, 10)  # Increased wait time
+            
+            # Try to find post button with multiple attempts
+            if not self.find_post_button(driver, wait):
+                raise Exception("لم يتم العثور على زر النشر بعد عدة محاولات")
+
+            time.sleep(2)
+
+            # Find text box
+            text_box_selectors = [
+                "//div[contains(@aria-label,  \"What's on your mind?\")]",
+                "//div[@aria-label='Create a public post…']",
+            ]
+
+            text_box = None
+            for selector in text_box_selectors:
+                try:
+                    text_box = wait.until(EC.presence_of_element_located((By.XPATH, selector)))
                     break
                 except:
                     continue
 
-            if not post_button:
-                raise Exception("لم يتم العثور على زر النشر")
+            if not text_box:
+                raise Exception("لم يتم العثور على مربع النص")
 
             time.sleep(2)
 
@@ -331,10 +372,17 @@ class FacebookAutomationGUI:
         except Exception as e:
             raise Exception(f"خطأ في نسخ الصورة إلى الحافظة: {str(e)}")
 
+        
     def validate_inputs(self):
         cookies = [c.strip() for c in self.cookie_text.get("1.0", tk.END).splitlines() if c.strip()]
         groups = [g.strip() for g in self.groups_text.get("1.0", tk.END).splitlines() if g.strip()]
-        post_content = self.posts_text.get("1.0", tk.END).strip()
+        
+        # Add profile link to groups if checkbox is checked
+        if self.add_profile_link.get():
+            groups.append("https://www.facebook.com/me/")
+            
+        posts_text = self.posts_text.get("1.0", tk.END).strip()
+        posts = [p.strip() for p in posts_text.split('&&') if p.strip()]
         images_folder = self.images_folder.get()
         
         if not cookies:
@@ -343,8 +391,8 @@ class FacebookAutomationGUI:
         if not groups:
             raise ValueError("الرجاء إدخال رابط مجموعة واحد على الأقل")
             
-        if not post_content:
-            raise ValueError("الرجاء إدخال نص المنشور")
+        if not posts:
+            raise ValueError("الرجاء إدخال نص منشور واحد على الأقل")
             
         if not os.path.isdir(images_folder):
             raise ValueError("الرجاء اختيار مجلد صور صحيح")
@@ -362,36 +410,75 @@ class FacebookAutomationGUI:
         except ValueError:
             raise ValueError("الرجاء إدخال رقم صحيح للفترة بين المنشورات")
             
-        return cookies, groups, post_content, image_files, images_folder, delay
+        return cookies, groups, posts, image_files, images_folder, delay
 
-    def run_automation(self, cookies, groups, post_content, image_files, images_folder, delay):
+    def distribute_images(self, image_files, cookies, posts):
+        """توزيع الصور على الحسابات والمنشورات"""
+        images_per_account = len(posts)  # عدد الصور المطلوبة لكل حساب
+        distributed_images = []
+        
+        # نسخ قائمة الصور لتجنب تعديل القائمة الأصلية
+        available_images = image_files.copy()
+        
+        for _ in cookies:
+            account_images = []
+            
+            # محاولة أخذ العدد المطلوب من الصور
+            for _ in range(images_per_account):
+                if available_images:
+                    # إذا كانت هناك صور متاحة، نأخذ واحدة
+                    image = available_images.pop(0)
+                else:
+                    # إذا نفدت الصور، نختار صورة عشوائية من القائمة الأصلية
+                    image = random.choice(image_files)
+                account_images.append(image)
+            
+            distributed_images.append(account_images)
+            
+        return distributed_images
+
+    def run_automation(self, cookies, groups, posts, image_files, images_folder, delay):
         self.status_label.config(text="جاري التشغيل...")
-        total_posts = len(groups) * len(image_files) * len(cookies)
+        total_posts = len(groups) * len(posts) * len(cookies)
         self.progress['maximum'] = total_posts
         progress_count = 0
         
-        for cookie_index, cookie in enumerate(cookies, 1):
+        # تحديث العدادات الإجمالية
+        self.current_cookie.set(f"0/{len(cookies)}")
+        self.current_group.set(f"0/{len(groups)}")
+        
+        # توزيع الصور على الحسابات
+        distributed_images = self.distribute_images(image_files, cookies, posts)
+        
+        for cookie_index, (cookie, account_images) in enumerate(zip(cookies, distributed_images), 1):
             if not self.is_running:
                 break
                 
+            # تحديث عداد الكوكيز
+            self.current_cookie.set(f"{cookie_index}/{len(cookies)}")
             self.log(f"\nجاري استخدام الكوكيز رقم {cookie_index}")
             
             try:
                 self.driver = self.create_driver()
                 self.import_cookie(self.driver, cookie)
                 
-                for group_link in groups:
+                for group_index, group_link in enumerate(groups, 1):
                     if not self.is_running:
                         break
                     
+                    # تحديث عداد المجموعات
+                    self.current_group.set(f"{group_index}/{len(groups)}")
                     self.log(f"\nجاري النشر في المجموعة: {group_link}")
                     
-                    for image_file in image_files:
+                    # استخدام صورة مختلفة مع كل منشور
+                    for post_index, (post_content, image_file) in enumerate(zip(posts, account_images), 1):
                         if not self.is_running:
                             break
                             
                         try:
                             image_path = os.path.abspath(os.path.join(images_folder, image_file))
+                            self.log(f"جاري نشر المنشور رقم {post_index} مع الصورة: {image_file}")
+                            
                             self.create_post(self.driver, group_link, post_content, image_path)
                             progress_count += 1
                             self.progress['value'] = progress_count
@@ -400,7 +487,7 @@ class FacebookAutomationGUI:
                             time.sleep(delay)
                             
                         except Exception as e:
-                            self.log(f"خطأ في نشر الصورة {image_file}: {str(e)}")
+                            self.log(f"خطأ في نشر المحتوى: {str(e)}")
                             continue
                 
                 if self.driver:
@@ -421,7 +508,11 @@ class FacebookAutomationGUI:
         self.start_button.state(['!disabled'])
         self.status_label.config(text="تم الانتهاء")
         self.log("تم الانتهاء من العملية")
+        # إعادة تعيين العدادات عند الانتهاء
+        self.current_cookie.set("0/0")
+        self.current_group.set("0/0")
 
+    
     def start_automation(self):
         if self.is_running:
             return
@@ -440,22 +531,24 @@ class FacebookAutomationGUI:
             messagebox.showerror("خطأ", str(e))
 
     def stop_automation(self):
-        if not self.is_running:
-            return
+            if not self.is_running:
+                return
+                
+            self.is_running = False
+            self.log("جاري إيقاف العملية...")
+            self.status_label.config(text="تم الإيقاف")
             
-        self.is_running = False
-        self.log("جاري إيقاف العملية...")
-        self.status_label.config(text="تم الإيقاف")
-        
-        if self.driver:
-            try:
-                self.driver.quit()
-            except:
-                pass
-            self.driver = None
-            
-        self.start_button.state(['!disabled'])
-
+            if self.driver:
+                try:
+                    self.driver.quit()
+                except:
+                    pass
+                self.driver = None
+                
+            self.start_button.state(['!disabled'])
+            # إعادة تعيين العدادات عند الإيقاف
+            self.current_cookie.set("0/0")
+            self.current_group.set("0/0")
     def run(self):
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.window.mainloop()
